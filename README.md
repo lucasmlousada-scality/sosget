@@ -113,7 +113,7 @@ To change settings later, click **⚙ Settings** in the main window.
 
 2. In the **Customer email** field enter the customer's SFTP login, e.g.:
    ```
-   jorge.casado.v@gmv.com
+   username@customer.com
    ```
 
 3. Open **Google Authenticator** on your phone and enter the current 6-digit code in the **OTP code** field.
