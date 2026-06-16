@@ -135,7 +135,44 @@ func (sa *sosApp) onConnect() {
 		}
 		sa.sftpClient = client
 
-		remotePath := sftp.CustomerPath(config.SFTPBasePath, email)
+		sa.setStatus("Searching for customer folder...")
+		candidates, err := client.FindCustomerFolders(config.SFTPBasePath, email)
+		if err != nil {
+			sa.setStatus("Error scanning folders: " + err.Error())
+			return
+		}
+		if len(candidates) == 0 {
+			sa.setStatus("No folder found matching " + email)
+			return
+		}
+
+		username := candidates[0]
+		if len(candidates) > 1 {
+			ch := make(chan string, 1)
+			fyne.Do(func() {
+				radio := widget.NewRadioGroup(candidates, nil)
+				radio.SetSelected(candidates[0])
+				d := dialog.NewCustomConfirm(
+					"Multiple folders found — pick one",
+					"Select", "Cancel",
+					radio,
+					func(ok bool) {
+						if ok && radio.Selected != "" {
+							ch <- radio.Selected
+						} else {
+							ch <- ""
+						}
+					}, sa.win)
+				d.Show()
+			})
+			username = <-ch
+			if username == "" {
+				sa.setStatus("Cancelled.")
+				return
+			}
+		}
+
+		remotePath := sftp.CustomerPathForUser(config.SFTPBasePath, username)
 		sa.setStatus("Listing files at " + remotePath + "...")
 
 		files, err := client.ListFiles(remotePath)

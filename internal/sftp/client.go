@@ -102,15 +102,63 @@ func (c *Client) Close() {
 	c.sshClient.Close()
 }
 
-// CustomerPath builds the deterministic SFTP path for a customer.
-// Pattern: {basePath}/chroot-{localPart}/home/{localPart}
-// where localPart is the portion of the email before '@'.
-func CustomerPath(basePath, email string) string {
+// CustomerPathForUser builds the SFTP path for a known username.
+func CustomerPathForUser(basePath, username string) string {
+	return path.Join(basePath, "chroot-"+username, "home", username)
+}
+
+// FindCustomerFolders scans basePath for chroot-* directories that fuzzy-match
+// the email's local part. Returns usernames (without "chroot-" prefix) sorted
+// best-match first. Handles suffixes like ".ext" in atul.belwal.ext@sodexo.com
+// matching the folder chroot-atul.belwal.
+func (c *Client) FindCustomerFolders(basePath, email string) ([]string, error) {
 	localPart := email
 	if i := strings.Index(email, "@"); i >= 0 {
 		localPart = email[:i]
 	}
-	return path.Join(basePath, "chroot-"+localPart, "home", localPart)
+	needle := strings.ToLower(localPart)
+
+	entries, err := c.sftpClient.ReadDir(basePath)
+	if err != nil {
+		return nil, fmt.Errorf("list %s: %w", basePath, err)
+	}
+
+	type hit struct {
+		username string
+		score    int
+	}
+	var hits []hit
+
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		raw := strings.ToLower(e.Name())
+		username := strings.TrimPrefix(raw, "chroot-")
+
+		var score int
+		switch {
+		case username == needle:
+			score = 4 // exact
+		case strings.HasPrefix(needle, username+"."):
+			score = 3 // email has extra suffix, e.g. atul.belwal.ext → atul.belwal
+		case strings.HasPrefix(username, needle+"."):
+			score = 2 // folder has extra suffix
+		case strings.Contains(needle, username) || strings.Contains(username, needle):
+			score = 1 // broad partial
+		}
+		if score > 0 {
+			hits = append(hits, hit{username, score})
+		}
+	}
+
+	sort.Slice(hits, func(i, j int) bool { return hits[i].score > hits[j].score })
+
+	result := make([]string, len(hits))
+	for i, h := range hits {
+		result[i] = h.username
+	}
+	return result, nil
 }
 
 // ListFiles returns all files (non-dirs) in dir, sorted newest first.
