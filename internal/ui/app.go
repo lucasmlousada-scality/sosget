@@ -48,7 +48,7 @@ func Run() {
 
 func (sa *sosApp) buildUI() fyne.CanvasObject {
 	sa.emailEntry = widget.NewEntry()
-	sa.emailEntry.SetPlaceHolder("jorge.casado.v@company.com")
+	sa.emailEntry.SetPlaceHolder("username@company.com")
 
 	sa.otpEntry = widget.NewPasswordEntry()
 	sa.otpEntry.SetPlaceHolder("6-digit code from Google Authenticator")
