@@ -1,5 +1,5 @@
-sosget
-sosget.exe
+/sosget
+/sosget.exe
 dist/
 *.test
 *.out
