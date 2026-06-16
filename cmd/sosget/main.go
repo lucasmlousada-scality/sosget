@@ -36,17 +36,16 @@ func run(email string) error {
 		return fmt.Errorf("%w\n\nRun 'sosget configure' to set up credentials", err)
 	}
 
-	remotePath := sftp.CustomerPath(cfg.SFTPBasePath, email)
+	remotePath := sftp.CustomerPath(config.SFTPBasePath, email)
 	fmt.Printf("Customer : %s\n", email)
 	fmt.Printf("SFTP path: %s\n\n", remotePath)
 
 	fmt.Println("Connecting to SFTP (you will be prompted for OTP)...")
 	client, err := sftp.Connect(sftp.Config{
-		Host:     cfg.SFTPHost,
-		Port:     cfg.SFTPPort,
+		Host:     config.SFTPHost,
+		Port:     config.SFTPPort,
 		Username: cfg.SFTPUser,
 		Password: cfg.SFTPPass,
-		BasePath: cfg.SFTPBasePath,
 	})
 	if err != nil {
 		return fmt.Errorf("sftp: %w", err)

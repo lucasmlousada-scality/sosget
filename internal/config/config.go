@@ -13,28 +13,20 @@ import (
 
 const (
 	keyringService = "sosget"
-	keyZendeskToken = "zendesk-token"
-	keySFTPPass     = "sftp-pass"
+	keySFTPPass    = "sftp-pass"
+
+	SFTPHost     = "ftp.scality.com"
+	SFTPPort     = 22
+	SFTPBasePath = "/customers"
 )
 
 type Config struct {
-	ZendeskDomain string `json:"zendesk_domain"`
-	ZendeskEmail  string `json:"zendesk_email"`
-	ZendeskToken  string `json:"-"`
-	SFTPHost      string `json:"sftp_host"`
-	SFTPPort      int    `json:"sftp_port"`
-	SFTPUser      string `json:"sftp_user"`
-	SFTPPass      string `json:"-"`
-	SFTPBasePath  string `json:"sftp_base_path"`
+	SFTPUser string `json:"sftp_user"`
+	SFTPPass string `json:"-"`
 }
 
 type fileConfig struct {
-	ZendeskDomain string `json:"zendesk_domain"`
-	ZendeskEmail  string `json:"zendesk_email"`
-	SFTPHost      string `json:"sftp_host"`
-	SFTPPort      int    `json:"sftp_port"`
-	SFTPUser      string `json:"sftp_user"`
-	SFTPBasePath  string `json:"sftp_base_path"`
+	SFTPUser string `json:"sftp_user"`
 }
 
 func configPath() (string, error) {
@@ -61,27 +53,12 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("parse config: %w", err)
 	}
 
-	cfg := &Config{
-		ZendeskDomain: fc.ZendeskDomain,
-		ZendeskEmail:  fc.ZendeskEmail,
-		SFTPHost:      fc.SFTPHost,
-		SFTPPort:      fc.SFTPPort,
-		SFTPUser:      fc.SFTPUser,
-		SFTPBasePath:  fc.SFTPBasePath,
+	if fc.SFTPUser == "" {
+		return nil, fmt.Errorf("sftp_user not set — run 'sosget configure'")
 	}
 
-	if cfg.SFTPPort == 0 {
-		cfg.SFTPPort = 22
-	}
-
-	cfg.ZendeskToken, _ = keyring.Get(keyringService, keyZendeskToken)
+	cfg := &Config{SFTPUser: fc.SFTPUser}
 	cfg.SFTPPass, _ = keyring.Get(keyringService, keySFTPPass)
-
-	// Zendesk is optional — missing token just means org name is prompted at runtime.
-	if cfg.SFTPHost == "" || cfg.SFTPUser == "" {
-		return nil, fmt.Errorf("incomplete SFTP credentials")
-	}
-
 	return cfg, nil
 }
 
@@ -95,41 +72,21 @@ func Configure() error {
 	}
 
 	var fc fileConfig
-
-	// Load existing config if present
 	if data, err := os.ReadFile(path); err == nil {
 		_ = json.Unmarshal(data, &fc)
 	}
 
 	fmt.Println("=== sosget configuration ===")
-	fmt.Println("Press Enter to keep existing values.")
-	fmt.Println()
-	fmt.Println("--- Zendesk (optional) ---")
-	fc.ZendeskDomain = prompt("Zendesk domain (e.g. scality.zendesk.com, leave blank to skip)", fc.ZendeskDomain)
-	if fc.ZendeskDomain != "" {
-		fc.ZendeskEmail = prompt("Zendesk email", fc.ZendeskEmail)
-		zdToken := promptSecret("Zendesk API token (hidden)")
-		if zdToken != "" {
-			if err := keyring.Set(keyringService, keyZendeskToken, zdToken); err != nil {
-				return fmt.Errorf("save zendesk token: %w", err)
-			}
-		}
-	}
-	fmt.Println()
-	fmt.Println("--- SFTP ---")
-	fc.SFTPHost = prompt("SFTP host", orDefault(fc.SFTPHost, "ftp.scality.com"))
-	fc.SFTPUser = prompt("SFTP username", fc.SFTPUser)
-	fc.SFTPBasePath = prompt("SFTP base path (customer folders root)", orDefault(fc.SFTPBasePath, "/"))
+	fmt.Printf("SFTP host : %s (fixed)\n", SFTPHost)
+	fmt.Printf("Base path : %s (fixed)\n\n", SFTPBasePath)
 
-	sftpPass := promptSecret("SFTP password (hidden, leave empty to always prompt)")
+	fc.SFTPUser = prompt("Your SFTP username", fc.SFTPUser)
+
+	sftpPass := promptSecret("Your SFTP password (stored in OS keyring, leave blank to always prompt)")
 	if sftpPass != "" {
 		if err := keyring.Set(keyringService, keySFTPPass, sftpPass); err != nil {
 			return fmt.Errorf("save sftp password: %w", err)
 		}
-	}
-
-	if fc.SFTPPort == 0 {
-		fc.SFTPPort = 22
 	}
 
 	data, err := json.MarshalIndent(fc, "", "  ")
@@ -141,7 +98,6 @@ func Configure() error {
 	}
 
 	fmt.Printf("\nConfiguration saved to %s\n", path)
-	fmt.Println("Secrets stored in OS keyring.")
 	return nil
 }
 
@@ -168,11 +124,4 @@ func promptSecret(label string) string {
 		return ""
 	}
 	return strings.TrimSpace(string(b))
-}
-
-func orDefault(val, def string) string {
-	if val == "" {
-		return def
-	}
-	return val
 }
