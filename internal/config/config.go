@@ -101,6 +101,30 @@ func Configure() error {
 	return nil
 }
 
+// SaveUser writes username to the config file and optionally saves password to keyring.
+// Called by the GUI settings dialog.
+func SaveUser(user, pass string) error {
+	path, err := configPath()
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		return err
+	}
+	fc := fileConfig{SFTPUser: user}
+	data, err := json.MarshalIndent(fc, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		return err
+	}
+	if pass != "" {
+		return keyring.Set(keyringService, keySFTPPass, pass)
+	}
+	return nil
+}
+
 func prompt(label, defaultVal string) string {
 	if defaultVal != "" {
 		fmt.Printf("%s [%s]: ", label, defaultVal)

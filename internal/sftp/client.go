@@ -21,6 +21,7 @@ type Config struct {
 	Username string
 	Password string
 	BasePath string
+	OTPCode  string // pre-captured from GUI; if empty, prompts terminal
 }
 
 type FileEntry struct {
@@ -51,6 +52,12 @@ func Connect(cfg Config) (*Client, error) {
 					answers[i] = storedPass
 					continue
 				}
+				// GUI mode: OTP was pre-captured in the UI field
+				if cfg.OTPCode != "" {
+					answers[i] = cfg.OTPCode
+					continue
+				}
+				// CLI fallback: prompt on terminal
 				fmt.Print(q)
 				b, err := term.ReadPassword(int(os.Stdin.Fd()))
 				fmt.Println()

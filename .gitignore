@@ -4,3 +4,6 @@ dist/
 *.test
 *.out
 .DS_Store
+*.tar.xz
+*.tar.gz
+sosreport-*/

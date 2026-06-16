@@ -1,9 +1,8 @@
-BINARY   := sosget
-MODULE   := github.com/lucasmlousada-scality/sosget
-VERSION  := $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
-LDFLAGS  := -s -w -X main.version=$(VERSION)
+BINARY  := sosget
+VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+LDFLAGS := -s -w -X main.version=$(VERSION)
 
-.PHONY: build tidy lint clean release
+.PHONY: build tidy clean release-mac release-linux release-windows
 
 build:
 	go build -ldflags="$(LDFLAGS)" -o $(BINARY) ./cmd/sosget
@@ -11,15 +10,23 @@ build:
 tidy:
 	go mod tidy
 
-lint:
-	golangci-lint run ./...
-
 clean:
-	rm -f $(BINARY) dist/
+	rm -f $(BINARY) && rm -rf dist/
 
-release:
-	GOOS=linux   GOARCH=amd64 go build -ldflags="$(LDFLAGS)" -o dist/$(BINARY)-linux-amd64   ./cmd/sosget
-	GOOS=darwin  GOARCH=amd64 go build -ldflags="$(LDFLAGS)" -o dist/$(BINARY)-darwin-amd64  ./cmd/sosget
-	GOOS=darwin  GOARCH=arm64 go build -ldflags="$(LDFLAGS)" -o dist/$(BINARY)-darwin-arm64  ./cmd/sosget
-	GOOS=windows GOARCH=amd64 go build -ldflags="$(LDFLAGS)" -o dist/$(BINARY)-windows-amd64.exe ./cmd/sosget
-	@echo "Binaries in dist/"
+# Build for each platform natively (Fyne requires CGo and platform GL libraries)
+release-mac:
+	mkdir -p dist
+	go build -ldflags="$(LDFLAGS)" -o dist/$(BINARY)-darwin ./cmd/sosget
+	@echo "macOS binary: dist/$(BINARY)-darwin"
+
+release-linux:
+	mkdir -p dist
+	CGO_ENABLED=1 go build -ldflags="$(LDFLAGS)" -o dist/$(BINARY)-linux ./cmd/sosget
+	@echo "Linux binary: dist/$(BINARY)-linux"
+
+release-windows:
+	mkdir -p dist
+	# Requires MinGW: brew install mingw-w64
+	CGO_ENABLED=1 CC=x86_64-w64-mingw32-gcc GOOS=windows GOARCH=amd64 \
+		go build -ldflags="$(LDFLAGS)" -o dist/$(BINARY)-windows.exe ./cmd/sosget
+	@echo "Windows binary: dist/$(BINARY)-windows.exe"
