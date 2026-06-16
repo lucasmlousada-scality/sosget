@@ -20,12 +20,13 @@ type sosApp struct {
 	sftpClient    *sftp.Client
 	selectedFiles []sftp.FileEntry
 
-	emailEntry  *widget.Entry
-	otpEntry    *widget.Entry
-	status      *widget.Label
-	fileList    *fyne.Container
-	downloadBtn *widget.Button
-	connectBtn  *widget.Button
+	emailEntry     *widget.Entry
+	otpEntry       *widget.Entry
+	status         *widget.Label
+	downloadDirLbl *widget.Label
+	fileList       *fyne.Container
+	downloadBtn    *widget.Button
+	connectBtn     *widget.Button
 }
 
 func Run() {
@@ -56,6 +57,9 @@ func (sa *sosApp) buildUI() fyne.CanvasObject {
 	sa.status = widget.NewLabel("Enter customer email and OTP, then click Connect.")
 	sa.status.Wrapping = fyne.TextWrapWord
 
+	sa.downloadDirLbl = widget.NewLabel(sa.downloadDirText())
+	sa.downloadDirLbl.Wrapping = fyne.TextTruncate
+
 	sa.fileList = container.NewVBox()
 	scroll := container.NewVScroll(sa.fileList)
 	scroll.SetMinSize(fyne.NewSize(0, 300))
@@ -79,7 +83,7 @@ func (sa *sosApp) buildUI() fyne.CanvasObject {
 	footer := container.NewVBox(
 		widget.NewSeparator(),
 		sa.status,
-		sa.downloadBtn,
+		container.NewHBox(sa.downloadBtn, sa.downloadDirLbl),
 	)
 
 	return container.NewBorder(header, footer, nil, nil, scroll)
@@ -146,7 +150,6 @@ func (sa *sosApp) onConnect() {
 
 		sa.fileList.Objects = nil
 		for _, f := range files {
-			f := f
 			label := fmt.Sprintf("%-60s  %8s  %s", f.Name, formatSize(f.Size), formatAge(f.ModTime))
 			check := widget.NewCheck(label, func(checked bool) {
 				if checked {
@@ -183,11 +186,7 @@ func (sa *sosApp) onDownload() {
 	files := make([]sftp.FileEntry, len(sa.selectedFiles))
 	copy(files, sa.selectedFiles)
 
-	dialog.ShowFolderOpen(func(uri fyne.ListableURI, err error) {
-		if err != nil || uri == nil {
-			return
-		}
-		destDir := uri.Path()
+	doDownload := func(destDir string) {
 		sa.downloadBtn.Disable()
 		go func() {
 			defer sa.downloadBtn.Enable()
@@ -200,22 +199,49 @@ func (sa *sosApp) onDownload() {
 			}
 			sa.setStatus(fmt.Sprintf("Done — %d file(s) saved to %s", len(files), destDir))
 		}()
-	}, sa.win)
+	}
+
+	if sa.cfg != nil && sa.cfg.DownloadDir != "" {
+		doDownload(sa.cfg.DownloadDir)
+	} else {
+		dialog.ShowFolderOpen(func(uri fyne.ListableURI, err error) {
+			if err != nil || uri == nil {
+				return
+			}
+			doDownload(uri.Path())
+		}, sa.win)
+	}
 }
 
 func (sa *sosApp) openSettings() {
 	userEntry := widget.NewEntry()
-	if sa.cfg != nil {
-		userEntry.SetText(sa.cfg.SFTPUser)
-	}
 	userEntry.SetPlaceHolder("your.username")
 
 	passEntry := widget.NewPasswordEntry()
 	passEntry.SetPlaceHolder("leave blank to keep existing")
 
+	dirEntry := widget.NewEntry()
+	dirEntry.SetPlaceHolder("/Users/you/Downloads")
+
+	if sa.cfg != nil {
+		userEntry.SetText(sa.cfg.SFTPUser)
+		dirEntry.SetText(sa.cfg.DownloadDir)
+	}
+
+	browseBtn := widget.NewButton("Browse…", func() {
+		dialog.ShowFolderOpen(func(uri fyne.ListableURI, err error) {
+			if err == nil && uri != nil {
+				dirEntry.SetText(uri.Path())
+			}
+		}, sa.win)
+	})
+
+	dirRow := container.NewBorder(nil, nil, nil, browseBtn, dirEntry)
+
 	items := []*widget.FormItem{
 		{Text: "SFTP Username", Widget: userEntry, HintText: "Your Scality SSO username"},
 		{Text: "SFTP Password", Widget: passEntry, HintText: "Stored in OS keychain"},
+		{Text: "Download folder", Widget: dirRow, HintText: "Where files are saved"},
 	}
 
 	dialog.ShowForm("Settings", "Save", "Cancel", items, func(ok bool) {
@@ -226,17 +252,25 @@ func (sa *sosApp) openSettings() {
 			dialog.ShowError(fmt.Errorf("username cannot be empty"), sa.win)
 			return
 		}
-		if err := config.SaveUser(userEntry.Text, passEntry.Text); err != nil {
+		if err := config.SaveAll(userEntry.Text, passEntry.Text, dirEntry.Text); err != nil {
 			dialog.ShowError(err, sa.win)
 			return
 		}
 		sa.cfg, _ = config.Load()
+		sa.downloadDirLbl.SetText(sa.downloadDirText())
 		sa.setStatus("Settings saved.")
 	}, sa.win)
 }
 
 func (sa *sosApp) setStatus(msg string) {
 	sa.status.SetText(msg)
+}
+
+func (sa *sosApp) downloadDirText() string {
+	if sa.cfg != nil && sa.cfg.DownloadDir != "" {
+		return "→ " + sa.cfg.DownloadDir
+	}
+	return "→ (no folder set)"
 }
 
 func formatSize(b int64) string {

@@ -21,12 +21,14 @@ const (
 )
 
 type Config struct {
-	SFTPUser string `json:"sftp_user"`
-	SFTPPass string `json:"-"`
+	SFTPUser    string `json:"sftp_user"`
+	SFTPPass    string `json:"-"`
+	DownloadDir string `json:"download_dir"`
 }
 
 type fileConfig struct {
-	SFTPUser string `json:"sftp_user"`
+	SFTPUser    string `json:"sftp_user"`
+	DownloadDir string `json:"download_dir"`
 }
 
 func configPath() (string, error) {
@@ -57,8 +59,14 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("sftp_user not set — run 'sosget configure'")
 	}
 
-	cfg := &Config{SFTPUser: fc.SFTPUser}
+	cfg := &Config{SFTPUser: fc.SFTPUser, DownloadDir: fc.DownloadDir}
 	cfg.SFTPPass, _ = keyring.Get(keyringService, keySFTPPass)
+	// Default download dir to ~/Downloads if not configured
+	if cfg.DownloadDir == "" {
+		if home, err := os.UserHomeDir(); err == nil {
+			cfg.DownloadDir = filepath.Join(home, "Downloads")
+		}
+	}
 	return cfg, nil
 }
 
@@ -101,9 +109,9 @@ func Configure() error {
 	return nil
 }
 
-// SaveUser writes username to the config file and optionally saves password to keyring.
-// Called by the GUI settings dialog.
-func SaveUser(user, pass string) error {
+// SaveAll persists all GUI-configurable settings. Pass empty string to leave
+// an existing password unchanged.
+func SaveAll(user, pass, downloadDir string) error {
 	path, err := configPath()
 	if err != nil {
 		return err
@@ -111,7 +119,7 @@ func SaveUser(user, pass string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return err
 	}
-	fc := fileConfig{SFTPUser: user}
+	fc := fileConfig{SFTPUser: user, DownloadDir: downloadDir}
 	data, err := json.MarshalIndent(fc, "", "  ")
 	if err != nil {
 		return err

@@ -4,6 +4,11 @@ dist/
 *.test
 *.out
 .DS_Store
+# downloaded sosreports — never commit these
 *.tar.xz
 *.tar.gz
-sosreport-*/
+*.tar.bz2
+*.tar.zst
+sosreport*/
+# credentials live in the OS keychain, not here
+# config.json is at ~/.config/sosget/ (outside the repo)
