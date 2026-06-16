@@ -77,9 +77,7 @@ func Load() (*Config, error) {
 	cfg.ZendeskToken, _ = keyring.Get(keyringService, keyZendeskToken)
 	cfg.SFTPPass, _ = keyring.Get(keyringService, keySFTPPass)
 
-	if cfg.ZendeskDomain == "" || cfg.ZendeskEmail == "" || cfg.ZendeskToken == "" {
-		return nil, fmt.Errorf("incomplete Zendesk credentials")
-	}
+	// Zendesk is optional — missing token just means org name is prompted at runtime.
 	if cfg.SFTPHost == "" || cfg.SFTPUser == "" {
 		return nil, fmt.Errorf("incomplete SFTP credentials")
 	}
@@ -106,17 +104,19 @@ func Configure() error {
 	fmt.Println("=== sosget configuration ===")
 	fmt.Println("Press Enter to keep existing values.")
 	fmt.Println()
-
-	fc.ZendeskDomain = prompt("Zendesk domain (e.g. scality.zendesk.com)", fc.ZendeskDomain)
-	fc.ZendeskEmail = prompt("Zendesk email", fc.ZendeskEmail)
-
-	zdToken := promptSecret("Zendesk API token (hidden)")
-	if zdToken != "" {
-		if err := keyring.Set(keyringService, keyZendeskToken, zdToken); err != nil {
-			return fmt.Errorf("save zendesk token: %w", err)
+	fmt.Println("--- Zendesk (optional) ---")
+	fc.ZendeskDomain = prompt("Zendesk domain (e.g. scality.zendesk.com, leave blank to skip)", fc.ZendeskDomain)
+	if fc.ZendeskDomain != "" {
+		fc.ZendeskEmail = prompt("Zendesk email", fc.ZendeskEmail)
+		zdToken := promptSecret("Zendesk API token (hidden)")
+		if zdToken != "" {
+			if err := keyring.Set(keyringService, keyZendeskToken, zdToken); err != nil {
+				return fmt.Errorf("save zendesk token: %w", err)
+			}
 		}
 	}
-
+	fmt.Println()
+	fmt.Println("--- SFTP ---")
 	fc.SFTPHost = prompt("SFTP host", orDefault(fc.SFTPHost, "sftp.scality.com"))
 	fc.SFTPUser = prompt("SFTP username", fc.SFTPUser)
 	fc.SFTPBasePath = prompt("SFTP base path (customer folders root)", orDefault(fc.SFTPBasePath, "/"))

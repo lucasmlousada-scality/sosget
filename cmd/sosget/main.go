@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bufio"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/lucasmlousada-scality/sosget/internal/config"
 	"github.com/lucasmlousada-scality/sosget/internal/sftp"
@@ -31,20 +33,40 @@ func main() {
 	}
 }
 
+func resolveOrgName(ticketID string, cfg *config.Config) (string, error) {
+	if cfg.ZendeskToken != "" && cfg.ZendeskDomain != "" {
+		fmt.Printf("Fetching ticket #%s from Zendesk...\n", ticketID)
+		zd := zendesk.New(cfg.ZendeskDomain, cfg.ZendeskEmail, cfg.ZendeskToken)
+		ticket, err := zd.GetTicket(ticketID)
+		if err != nil {
+			return "", fmt.Errorf("zendesk: %w", err)
+		}
+		fmt.Printf("Customer : %s\n", ticket.RequesterName)
+		fmt.Printf("Org      : %s\n", ticket.OrgName)
+		return ticket.OrgName, nil
+	}
+
+	fmt.Printf("Ticket #%s — no Zendesk token configured.\n", ticketID)
+	fmt.Print("Customer/org name (used to find SFTP folder): ")
+	scanner := bufio.NewScanner(os.Stdin)
+	scanner.Scan()
+	name := strings.TrimSpace(scanner.Text())
+	if name == "" {
+		return "", fmt.Errorf("org name is required")
+	}
+	return name, nil
+}
+
 func run(ticketID string) error {
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("%w\n\nRun 'sosget configure' to set up credentials", err)
 	}
 
-	fmt.Printf("Fetching ticket #%s from Zendesk...\n", ticketID)
-	zd := zendesk.New(cfg.ZendeskDomain, cfg.ZendeskEmail, cfg.ZendeskToken)
-	ticket, err := zd.GetTicket(ticketID)
+	orgName, err := resolveOrgName(ticketID, cfg)
 	if err != nil {
-		return fmt.Errorf("zendesk: %w", err)
+		return err
 	}
-	fmt.Printf("Customer : %s\n", ticket.RequesterName)
-	fmt.Printf("Org      : %s\n", ticket.OrgName)
 	fmt.Println()
 
 	fmt.Println("Connecting to SFTP (you will be prompted for OTP)...")
@@ -60,7 +82,7 @@ func run(ticketID string) error {
 	}
 	defer client.Close()
 
-	folder, err := client.FindCustomerFolder(ticket.OrgName)
+	folder, err := client.FindCustomerFolder(orgName)
 	if err != nil {
 		return fmt.Errorf("find folder: %w", err)
 	}
