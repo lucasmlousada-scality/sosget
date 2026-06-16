@@ -95,38 +95,15 @@ func (c *Client) Close() {
 	c.sshClient.Close()
 }
 
-// FindCustomerFolder searches cfg.BasePath for a directory matching orgName
-// (case-insensitive substring). If multiple match, returns the closest match.
-func (c *Client) FindCustomerFolder(orgName string) (string, error) {
-	if orgName == "" {
-		return c.sftpClient.Getwd()
+// CustomerPath builds the deterministic SFTP path for a customer.
+// Pattern: {basePath}/chroot-{localPart}/home/{localPart}
+// where localPart is the portion of the email before '@'.
+func CustomerPath(basePath, email string) string {
+	localPart := email
+	if i := strings.Index(email, "@"); i >= 0 {
+		localPart = email[:i]
 	}
-
-	entries, err := c.sftpClient.ReadDir("/")
-	if err != nil {
-		return "", fmt.Errorf("list root: %w", err)
-	}
-
-	needle := strings.ToLower(orgName)
-	var exact, partial []string
-	for _, e := range entries {
-		if !e.IsDir() {
-			continue
-		}
-		lower := strings.ToLower(e.Name())
-		if lower == needle {
-			exact = append(exact, e.Name())
-		} else if strings.Contains(lower, needle) || strings.Contains(needle, lower) {
-			partial = append(partial, e.Name())
-		}
-	}
-
-	candidates := append(exact, partial...)
-	if len(candidates) == 0 {
-		return "", fmt.Errorf("no folder matching %q found on SFTP root", orgName)
-	}
-	// Prefer exact; otherwise pick first partial
-	return "/" + candidates[0], nil
+	return path.Join(basePath, "chroot-"+localPart, "home", localPart)
 }
 
 // ListFiles returns all files (non-dirs) in dir, sorted newest first.

@@ -1,20 +1,17 @@
 package main
 
 import (
-	"bufio"
 	"fmt"
 	"os"
-	"strings"
 
 	"github.com/lucasmlousada-scality/sosget/internal/config"
 	"github.com/lucasmlousada-scality/sosget/internal/sftp"
 	"github.com/lucasmlousada-scality/sosget/internal/tui"
-	"github.com/lucasmlousada-scality/sosget/internal/zendesk"
 )
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "Usage: sosget <ticket-id>")
+		fmt.Fprintln(os.Stderr, "Usage: sosget <customer-email>")
 		fmt.Fprintln(os.Stderr, "       sosget configure")
 		os.Exit(1)
 	}
@@ -33,41 +30,15 @@ func main() {
 	}
 }
 
-func resolveOrgName(ticketID string, cfg *config.Config) (string, error) {
-	if cfg.ZendeskToken != "" && cfg.ZendeskDomain != "" {
-		fmt.Printf("Fetching ticket #%s from Zendesk...\n", ticketID)
-		zd := zendesk.New(cfg.ZendeskDomain, cfg.ZendeskEmail, cfg.ZendeskToken)
-		ticket, err := zd.GetTicket(ticketID)
-		if err != nil {
-			return "", fmt.Errorf("zendesk: %w", err)
-		}
-		fmt.Printf("Customer : %s\n", ticket.RequesterName)
-		fmt.Printf("Org      : %s\n", ticket.OrgName)
-		return ticket.OrgName, nil
-	}
-
-	fmt.Printf("Ticket #%s — no Zendesk token configured.\n", ticketID)
-	fmt.Print("Customer/org name (used to find SFTP folder): ")
-	scanner := bufio.NewScanner(os.Stdin)
-	scanner.Scan()
-	name := strings.TrimSpace(scanner.Text())
-	if name == "" {
-		return "", fmt.Errorf("org name is required")
-	}
-	return name, nil
-}
-
-func run(ticketID string) error {
+func run(email string) error {
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("%w\n\nRun 'sosget configure' to set up credentials", err)
 	}
 
-	orgName, err := resolveOrgName(ticketID, cfg)
-	if err != nil {
-		return err
-	}
-	fmt.Println()
+	remotePath := sftp.CustomerPath(cfg.SFTPBasePath, email)
+	fmt.Printf("Customer : %s\n", email)
+	fmt.Printf("SFTP path: %s\n\n", remotePath)
 
 	fmt.Println("Connecting to SFTP (you will be prompted for OTP)...")
 	client, err := sftp.Connect(sftp.Config{
@@ -82,18 +53,12 @@ func run(ticketID string) error {
 	}
 	defer client.Close()
 
-	folder, err := client.FindCustomerFolder(orgName)
-	if err != nil {
-		return fmt.Errorf("find folder: %w", err)
-	}
-	fmt.Printf("Found folder: %s\n\n", folder)
-
-	files, err := client.ListFiles(folder)
+	files, err := client.ListFiles(remotePath)
 	if err != nil {
 		return fmt.Errorf("list files: %w", err)
 	}
 	if len(files) == 0 {
-		fmt.Println("No files found in customer folder.")
+		fmt.Println("No files found.")
 		return nil
 	}
 

@@ -117,7 +117,7 @@ func Configure() error {
 	}
 	fmt.Println()
 	fmt.Println("--- SFTP ---")
-	fc.SFTPHost = prompt("SFTP host", orDefault(fc.SFTPHost, "sftp.scality.com"))
+	fc.SFTPHost = prompt("SFTP host", orDefault(fc.SFTPHost, "ftp.scality.com"))
 	fc.SFTPUser = prompt("SFTP username", fc.SFTPUser)
 	fc.SFTPBasePath = prompt("SFTP base path (customer folders root)", orDefault(fc.SFTPBasePath, "/"))
 
