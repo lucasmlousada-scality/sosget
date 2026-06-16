@@ -1,0 +1,6 @@
+sosget
+sosget.exe
+dist/
+*.test
+*.out
+.DS_Store
