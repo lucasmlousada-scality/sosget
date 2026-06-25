@@ -17,12 +17,13 @@ import (
 )
 
 type Config struct {
-	Host     string
-	Port     int
-	Username string
-	Password string
-	BasePath string
-	OTPCode  string // pre-captured from GUI; if empty, prompts terminal
+	Host        string
+	Port        int
+	Username    string
+	Password    string
+	BasePath    string
+	OTPCode     string // pre-captured from GUI; if empty, prompts terminal
+	TwoFADevice string // e.g. "Google Authenticator", "OneLogin Protect"
 }
 
 type FileEntry struct {
@@ -58,9 +59,8 @@ func Connect(cfg Config) (*Client, error) {
 				case isDeviceChooser(lq):
 					// Scality SFTP 2FA presents a device-selection round
 					// ("0: Google Authenticator", "1: OneLogin Protect", ...)
-					// before the actual token prompt. Auto-pick Google
-					// Authenticator's index so the OTP lands on the next round.
-					answers[i] = secondFactorIndex(q)
+					// before the actual token prompt. Pick the configured device.
+					answers[i] = deviceIndex(q, cfg.TwoFADevice)
 					continue
 				default:
 					// The token / one-time-code prompt.
@@ -254,12 +254,14 @@ func isDeviceChooser(lowerPrompt string) bool {
 	)
 }
 
-var gaDeviceRe = regexp.MustCompile(`(?i)(\d+)\s*:\s*google authenticator`)
-
-// secondFactorIndex extracts the menu index of the Google Authenticator device
-// from the chooser prompt (e.g. "- 0: Google Authenticator"). Defaults to "0".
-func secondFactorIndex(prompt string) string {
-	if m := gaDeviceRe.FindStringSubmatch(prompt); m != nil {
+// deviceIndex finds the menu index of deviceName inside a device-chooser prompt.
+// Falls back to "0" if the device is not listed or deviceName is empty.
+func deviceIndex(prompt, deviceName string) string {
+	if deviceName == "" {
+		deviceName = "Google Authenticator"
+	}
+	re := regexp.MustCompile(`(?i)(\d+)\s*:\s*` + regexp.QuoteMeta(deviceName))
+	if m := re.FindStringSubmatch(prompt); m != nil {
 		return m[1]
 	}
 	return "0"

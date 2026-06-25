@@ -123,11 +123,12 @@ func (sa *sosApp) onConnect() {
 		}
 
 		client, err := sftp.Connect(sftp.Config{
-			Host:     config.SFTPHost,
-			Port:     config.SFTPPort,
-			Username: sa.cfg.SFTPUser,
-			Password: sa.cfg.SFTPPass,
-			OTPCode:  otp,
+			Host:        config.SFTPHost,
+			Port:        config.SFTPPort,
+			Username:    sa.cfg.SFTPUser,
+			Password:    sa.cfg.SFTPPass,
+			OTPCode:     otp,
+			TwoFADevice: sa.cfg.TwoFADevice,
 		})
 		if err != nil {
 			sa.setStatus("Connection failed: " + err.Error())
@@ -275,10 +276,18 @@ func (sa *sosApp) openSettings() {
 
 	dirRow := container.NewBorder(nil, nil, nil, browseBtn, dirEntry)
 
+	twoFASelect := widget.NewSelect(config.TwoFADevices, nil)
+	if sa.cfg != nil && sa.cfg.TwoFADevice != "" {
+		twoFASelect.SetSelected(sa.cfg.TwoFADevice)
+	} else {
+		twoFASelect.SetSelected(config.TwoFADevices[0])
+	}
+
 	items := []*widget.FormItem{
 		{Text: "SFTP Username", Widget: userEntry, HintText: "Your Scality SSO username"},
 		{Text: "SFTP Password", Widget: passEntry, HintText: "Stored in OS keychain"},
 		{Text: "Download folder", Widget: dirRow, HintText: "Where files are saved"},
+		{Text: "2FA method", Widget: twoFASelect, HintText: "Device used for authentication"},
 	}
 
 	dialog.ShowForm("Settings", "Save", "Cancel", items, func(ok bool) {
@@ -289,7 +298,7 @@ func (sa *sosApp) openSettings() {
 			dialog.ShowError(fmt.Errorf("username cannot be empty"), sa.win)
 			return
 		}
-		if err := config.SaveAll(userEntry.Text, passEntry.Text, dirEntry.Text); err != nil {
+		if err := config.SaveAll(userEntry.Text, passEntry.Text, dirEntry.Text, twoFASelect.Selected); err != nil {
 			dialog.ShowError(err, sa.win)
 			return
 		}

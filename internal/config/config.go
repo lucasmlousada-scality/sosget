@@ -20,15 +20,20 @@ const (
 	SFTPBasePath = "/customers"
 )
 
+// TwoFADevices is the list of supported 2FA methods shown in Settings.
+var TwoFADevices = []string{"Google Authenticator", "OneLogin Protect"}
+
 type Config struct {
 	SFTPUser    string `json:"sftp_user"`
 	SFTPPass    string `json:"-"`
 	DownloadDir string `json:"download_dir"`
+	TwoFADevice string `json:"two_fa_device"`
 }
 
 type fileConfig struct {
 	SFTPUser    string `json:"sftp_user"`
 	DownloadDir string `json:"download_dir"`
+	TwoFADevice string `json:"two_fa_device"`
 }
 
 func configPath() (string, error) {
@@ -59,7 +64,7 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("sftp_user not set — run 'sosget configure'")
 	}
 
-	cfg := &Config{SFTPUser: fc.SFTPUser, DownloadDir: fc.DownloadDir}
+	cfg := &Config{SFTPUser: fc.SFTPUser, DownloadDir: fc.DownloadDir, TwoFADevice: fc.TwoFADevice}
 	cfg.SFTPPass, _ = keyring.Get(keyringService, keySFTPPass)
 	// Default download dir to ~/Downloads if not configured
 	if cfg.DownloadDir == "" {
@@ -111,7 +116,7 @@ func Configure() error {
 
 // SaveAll persists all GUI-configurable settings. Pass empty string to leave
 // an existing password unchanged.
-func SaveAll(user, pass, downloadDir string) error {
+func SaveAll(user, pass, downloadDir, twoFADevice string) error {
 	path, err := configPath()
 	if err != nil {
 		return err
@@ -119,7 +124,7 @@ func SaveAll(user, pass, downloadDir string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return err
 	}
-	fc := fileConfig{SFTPUser: user, DownloadDir: downloadDir}
+	fc := fileConfig{SFTPUser: user, DownloadDir: downloadDir, TwoFADevice: twoFADevice}
 	data, err := json.MarshalIndent(fc, "", "  ")
 	if err != nil {
 		return err
