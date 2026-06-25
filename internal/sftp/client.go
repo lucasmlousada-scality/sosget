@@ -6,6 +6,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -47,17 +48,28 @@ func Connect(cfg Config) (*Client, error) {
 			}
 			answers := make([]string, len(questions))
 			for i, q := range questions {
-				isPass := containsAny(strings.ToLower(q), "password", "passwd")
-				if isPass && storedPass != "" {
-					answers[i] = storedPass
+				lq := strings.ToLower(q)
+				switch {
+				case containsAny(lq, "password", "passwd"):
+					if storedPass != "" {
+						answers[i] = storedPass
+						continue
+					}
+				case isDeviceChooser(lq):
+					// Scality SFTP 2FA presents a device-selection round
+					// ("0: Google Authenticator", "1: OneLogin Protect", ...)
+					// before the actual token prompt. Auto-pick Google
+					// Authenticator's index so the OTP lands on the next round.
+					answers[i] = secondFactorIndex(q)
 					continue
+				default:
+					// The token / one-time-code prompt.
+					if cfg.OTPCode != "" {
+						answers[i] = cfg.OTPCode
+						continue
+					}
 				}
-				// GUI mode: OTP was pre-captured in the UI field
-				if cfg.OTPCode != "" {
-					answers[i] = cfg.OTPCode
-					continue
-				}
-				// CLI fallback: prompt on terminal
+				// CLI fallback: prompt on terminal (no stored secret available).
 				fmt.Print(q)
 				b, err := term.ReadPassword(int(os.Stdin.Fd()))
 				fmt.Println()
@@ -227,4 +239,28 @@ func containsAny(s string, subs ...string) bool {
 		}
 	}
 	return false
+}
+
+// isDeviceChooser reports whether a keyboard-interactive prompt is the Scality
+// 2FA device-selection step (Google Authenticator vs OneLogin Protect, ...)
+// rather than the password or token prompt.
+func isDeviceChooser(lowerPrompt string) bool {
+	return containsAny(lowerPrompt,
+		"second factor devices found",
+		"chose a device",
+		"choose a device",
+		"valid choices are among",
+		"enter a number",
+	)
+}
+
+var gaDeviceRe = regexp.MustCompile(`(?i)(\d+)\s*:\s*google authenticator`)
+
+// secondFactorIndex extracts the menu index of the Google Authenticator device
+// from the chooser prompt (e.g. "- 0: Google Authenticator"). Defaults to "0".
+func secondFactorIndex(prompt string) string {
+	if m := gaDeviceRe.FindStringSubmatch(prompt); m != nil {
+		return m[1]
+	}
+	return "0"
 }

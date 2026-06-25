@@ -12,3 +12,6 @@ dist/
 sosreport*/
 # credentials live in the OS keychain, not here
 # config.json is at ~/.config/sosget/ (outside the repo)
+# direnv: holds the GH_TOKEN for this repo — never commit it
+.envrc
+.direnv/
