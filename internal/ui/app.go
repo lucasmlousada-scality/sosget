@@ -14,13 +14,20 @@ import (
 	"github.com/lucasmlousada-scality/sosget/internal/sftp"
 )
 
+const (
+	modeEmail    = "By email"
+	modeUsername = "By username"
+)
+
 type sosApp struct {
 	win           fyne.Window
 	cfg           *config.Config
 	sftpClient    *sftp.Client
 	selectedFiles []sftp.FileEntry
 
-	emailEntry     *widget.Entry
+	lookupMode     string // modeEmail or modeUsername
+	lookupEntry    *widget.Entry
+	lookupFormItem *widget.FormItem
 	otpEntry       *widget.Entry
 	status         *widget.Label
 	downloadDirLbl *widget.Label
@@ -48,13 +55,30 @@ func Run() {
 }
 
 func (sa *sosApp) buildUI() fyne.CanvasObject {
-	sa.emailEntry = widget.NewEntry()
-	sa.emailEntry.SetPlaceHolder("username@company.com")
+	sa.lookupMode = modeEmail
+
+	sa.lookupEntry = widget.NewEntry()
+	sa.lookupEntry.SetPlaceHolder("username@company.com")
+
+	sa.lookupFormItem = widget.NewFormItem("Customer email", sa.lookupEntry)
+
+	modeToggle := widget.NewRadioGroup([]string{modeEmail, modeUsername}, func(selected string) {
+		sa.lookupMode = selected
+		if selected == modeUsername {
+			sa.lookupFormItem.Text = "Username"
+			sa.lookupEntry.SetPlaceHolder("firstname.lastname  (e.g. jane.doe)")
+		} else {
+			sa.lookupFormItem.Text = "Customer email"
+			sa.lookupEntry.SetPlaceHolder("username@company.com")
+		}
+	})
+	modeToggle.SetSelected(modeEmail)
+	modeToggle.Horizontal = true
 
 	sa.otpEntry = widget.NewPasswordEntry()
-	sa.otpEntry.SetPlaceHolder("6-digit code from Google Authenticator")
+	sa.otpEntry.SetPlaceHolder("6-digit code from your authenticator app")
 
-	sa.status = widget.NewLabel("Enter customer email and OTP, then click Connect.")
+	sa.status = widget.NewLabel("Enter customer info and OTP, then click Connect.")
 	sa.status.Wrapping = fyne.TextWrapWord
 
 	sa.downloadDirLbl = widget.NewLabel(sa.downloadDirText())
@@ -70,11 +94,14 @@ func (sa *sosApp) buildUI() fyne.CanvasObject {
 	sa.downloadBtn = widget.NewButton("Download Selected", sa.onDownload)
 	sa.downloadBtn.Disable()
 
+	form := widget.NewForm(
+		widget.NewFormItem("Lookup by", modeToggle),
+		sa.lookupFormItem,
+		widget.NewFormItem("OTP code", sa.otpEntry),
+	)
+
 	header := container.NewVBox(
-		widget.NewForm(
-			widget.NewFormItem("Customer email", sa.emailEntry),
-			widget.NewFormItem("OTP code", sa.otpEntry),
-		),
+		form,
 		container.NewHBox(sa.connectBtn, settingsBtn),
 		widget.NewSeparator(),
 		widget.NewLabelWithStyle("Files (newest first):", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
@@ -90,11 +117,15 @@ func (sa *sosApp) buildUI() fyne.CanvasObject {
 }
 
 func (sa *sosApp) onConnect() {
-	email := sa.emailEntry.Text
+	input := sa.lookupEntry.Text
 	otp := sa.otpEntry.Text
 
-	if email == "" {
-		sa.setStatus("Please enter a customer email.")
+	if input == "" {
+		if sa.lookupMode == modeUsername {
+			sa.setStatus("Please enter a username (e.g. firstname.lastname).")
+		} else {
+			sa.setStatus("Please enter a customer email.")
+		}
 		return
 	}
 	if otp == "" {
@@ -136,40 +167,49 @@ func (sa *sosApp) onConnect() {
 		}
 		sa.sftpClient = client
 
-		sa.setStatus("Searching for customer folder...")
-		candidates, err := client.FindCustomerFolders(config.SFTPBasePath, email)
-		if err != nil {
-			sa.setStatus("Error scanning folders: " + err.Error())
-			return
-		}
-		if len(candidates) == 0 {
-			sa.setStatus("No folder found matching " + email)
-			return
-		}
+		var username string
 
-		username := candidates[0]
-		if len(candidates) > 1 {
-			ch := make(chan string, 1)
-			fyne.Do(func() {
-				radio := widget.NewRadioGroup(candidates, nil)
-				radio.SetSelected(candidates[0])
-				d := dialog.NewCustomConfirm(
-					"Multiple folders found — pick one",
-					"Select", "Cancel",
-					radio,
-					func(ok bool) {
-						if ok && radio.Selected != "" {
-							ch <- radio.Selected
-						} else {
-							ch <- ""
-						}
-					}, sa.win)
-				d.Show()
-			})
-			username = <-ch
-			if username == "" {
-				sa.setStatus("Cancelled.")
+		if sa.lookupMode == modeUsername {
+			// Direct mode: use exactly what the user typed as the folder name.
+			// CustomerPathForUser will build /customers/chroot-<username>/home/<username>
+			username = input
+		} else {
+			// Email mode: fuzzy-search chroot-* folders
+			sa.setStatus("Searching for customer folder...")
+			candidates, err := client.FindCustomerFolders(config.SFTPBasePath, input)
+			if err != nil {
+				sa.setStatus("Error scanning folders: " + err.Error())
 				return
+			}
+			if len(candidates) == 0 {
+				sa.setStatus("No folder found matching " + input)
+				return
+			}
+
+			username = candidates[0]
+			if len(candidates) > 1 {
+				ch := make(chan string, 1)
+				fyne.Do(func() {
+					radio := widget.NewRadioGroup(candidates, nil)
+					radio.SetSelected(candidates[0])
+					d := dialog.NewCustomConfirm(
+						"Multiple folders found — pick one",
+						"Select", "Cancel",
+						radio,
+						func(ok bool) {
+							if ok && radio.Selected != "" {
+								ch <- radio.Selected
+							} else {
+								ch <- ""
+							}
+						}, sa.win)
+					d.Show()
+				})
+				username = <-ch
+				if username == "" {
+					sa.setStatus("Cancelled.")
+					return
+				}
 			}
 		}
 

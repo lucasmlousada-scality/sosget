@@ -1,6 +1,6 @@
 # sosget
 
-Desktop tool for Scality support engineers. Given a customer email, it connects to the Scality SFTP server, lists the files in their folder sorted by date, and lets you select and download them — all from a native GUI window.
+Desktop tool for Scality support engineers. Given a customer email or SSO username, it connects to the Scality SFTP server, lists the files in their folder sorted by date, and lets you select and download them — all from a native GUI window.
 
 ---
 
@@ -91,7 +91,7 @@ On first launch the **Settings** dialog opens automatically. Fill in:
 
 | Field | Value |
 |---|---|
-| SFTP Username | Your Scality SSO username (e.g. `lucas.mlousada`) |
+| SFTP Username | Your Scality SSO username (e.g. `jane.doe`) |
 | SFTP Password | Your Scality SSO password — stored in the OS keychain, never on disk |
 | Download folder | Where downloaded files will be saved (defaults to `~/Downloads`) |
 
@@ -111,12 +111,12 @@ To change settings later, click **⚙ Settings** in the main window.
    ./sosget
    ```
 
-2. In the **Customer email** field enter the customer's SFTP login, e.g.:
-   ```
-   username@customer.com
-   ```
+2. Choose how to look up the customer with the **Lookup by** selector:
 
-3. Open **Google Authenticator** on your phone and enter the current 6-digit code in the **OTP code** field.
+   - **By email** — enter the customer's email, e.g. `username@customer.com`. The app fuzzy-matches it against the customer folders on the server to find the right one.
+   - **By username** — enter the folder username directly, e.g. `jane.doe`. The app uses it as-is, with no matching.
+
+3. Open your authenticator app (e.g. Google Authenticator or OneLogin Protect) and enter the current 6-digit code in the **OTP code** field.
 
 4. Click **Connect**.
    - The app connects to `ftp.scality.com` using your credentials.
