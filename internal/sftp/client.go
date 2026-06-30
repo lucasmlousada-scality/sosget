@@ -1,8 +1,10 @@
 package sftp
 
 import (
+	"context"
+	"errors"
 	"fmt"
-	"io"
+	"net"
 	"os"
 	"path"
 	"path/filepath"
@@ -13,6 +15,7 @@ import (
 
 	"github.com/pkg/sftp"
 	"golang.org/x/crypto/ssh"
+	"golang.org/x/crypto/ssh/knownhosts"
 	"golang.org/x/term"
 )
 
@@ -87,10 +90,15 @@ func Connect(cfg Config) (*Client, error) {
 		authMethods = append([]ssh.AuthMethod{ssh.Password(storedPass)}, authMethods...)
 	}
 
+	hostKeyCB, err := knownHostsCallback()
+	if err != nil {
+		return nil, fmt.Errorf("host key setup: %w", err)
+	}
+
 	sshCfg := &ssh.ClientConfig{
 		User:            cfg.Username,
 		Auth:            authMethods,
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(), //nolint:gosec
+		HostKeyCallback: hostKeyCB,
 		Timeout:         30 * time.Second,
 	}
 
@@ -107,6 +115,61 @@ func Connect(cfg Config) (*Client, error) {
 	}
 
 	return &Client{sftpClient: sftpConn, sshClient: sshConn}, nil
+}
+
+// knownHostsCallback returns an SSH host-key verifier backed by the user's
+// ~/.ssh/known_hosts file. Unknown hosts are accepted on first use and their
+// key recorded (trust-on-first-use); a key that later changes is rejected,
+// which is what protects against man-in-the-middle attacks.
+func knownHostsCallback() (ssh.HostKeyCallback, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil, err
+	}
+	sshDir := filepath.Join(home, ".ssh")
+	if err := os.MkdirAll(sshDir, 0700); err != nil {
+		return nil, err
+	}
+	khPath := filepath.Join(sshDir, "known_hosts")
+
+	// Ensure the file exists so knownhosts.New can open it.
+	f, err := os.OpenFile(khPath, os.O_CREATE|os.O_APPEND, 0600)
+	if err != nil {
+		return nil, err
+	}
+	f.Close()
+
+	verify, err := knownhosts.New(khPath)
+	if err != nil {
+		return nil, err
+	}
+
+	return func(hostname string, remote net.Addr, key ssh.PublicKey) error {
+		err := verify(hostname, remote, key)
+		if err == nil {
+			return nil
+		}
+		// A KeyError with non-empty Want means the host is known but the key
+		// differs — a genuine security concern, so reject.
+		var keyErr *knownhosts.KeyError
+		if errors.As(err, &keyErr) && len(keyErr.Want) > 0 {
+			return fmt.Errorf("host key mismatch for %s — possible MITM; remove the old entry from %s if the server key legitimately changed", hostname, khPath)
+		}
+		// Otherwise the host is simply unknown: record it (TOFU).
+		return appendKnownHost(khPath, hostname, key)
+	}, nil
+}
+
+// appendKnownHost adds a host key line to the known_hosts file.
+func appendKnownHost(khPath, hostname string, key ssh.PublicKey) error {
+	f, err := os.OpenFile(khPath, os.O_APPEND|os.O_WRONLY, 0600)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	line := knownhosts.Line([]string{knownhosts.Normalize(hostname)}, key)
+	_, err = f.WriteString(line + "\n")
+	return err
 }
 
 func (c *Client) Close() {
@@ -213,8 +276,17 @@ func (c *Client) ListFiles(dir string) ([]FileEntry, error) {
 	return files, nil
 }
 
-// Download copies a remote file to destDir, showing a simple progress line.
-func (c *Client) Download(f FileEntry, destDir string) error {
+// Download copies a remote file to destDir. If progress is non-nil it is called
+// roughly a few times per second with the bytes copied so far and the total
+// expected. After copying it verifies the written size matches the expected
+// size to catch truncated transfers.
+//
+// It uses (*sftp.File).WriteTo, which performs concurrent reads and is far
+// faster than a plain io.Copy over SFTP. Progress is sampled from a separate
+// goroutine so it never slows the transfer down. Cancelling ctx aborts the
+// in-flight transfer by closing the remote file, and the partial local file is
+// removed.
+func (c *Client) Download(ctx context.Context, f FileEntry, destDir string, progress func(written, total int64)) error {
 	remote, err := c.sftpClient.Open(f.Path)
 	if err != nil {
 		return err
@@ -228,8 +300,59 @@ func (c *Client) Download(f FileEntry, destDir string) error {
 	}
 	defer local.Close()
 
-	_, err = io.Copy(local, remote)
-	return err
+	done := make(chan struct{})
+
+	// Watch for cancellation: closing the remote file makes WriteTo return.
+	go func() {
+		select {
+		case <-ctx.Done():
+			remote.Close()
+		case <-done:
+		}
+	}()
+
+	// Sample progress in the background by polling the local file size, so the
+	// transfer itself runs at full speed via WriteTo's concurrent reads.
+	if progress != nil && f.Size > 0 {
+		go func() {
+			ticker := time.NewTicker(250 * time.Millisecond)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-done:
+					return
+				case <-ticker.C:
+					if fi, err := local.Stat(); err == nil {
+						progress(fi.Size(), f.Size)
+					}
+				}
+			}
+		}()
+	}
+
+	// WriteTo uses the sftp client's concurrent request pipeline.
+	written, err := remote.WriteTo(local)
+	close(done)
+
+	// If cancelled, clean up the partial file and report cancellation.
+	if ctx.Err() != nil {
+		local.Close()
+		os.Remove(localName)
+		return ctx.Err()
+	}
+	if err != nil {
+		return fmt.Errorf("copy %s: %w", f.Name, err)
+	}
+
+	if progress != nil && f.Size > 0 {
+		progress(written, f.Size) // final 100%
+	}
+
+	// Verify integrity: the written size must match what the server advertised.
+	if f.Size > 0 && written != f.Size {
+		return fmt.Errorf("size mismatch for %s: got %d bytes, expected %d (transfer may be truncated)", f.Name, written, f.Size)
+	}
+	return nil
 }
 
 func containsAny(s string, subs ...string) bool {
