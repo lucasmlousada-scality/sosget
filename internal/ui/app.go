@@ -1,11 +1,16 @@
 package ui
 
 import (
+	"context"
 	"fmt"
+	"image/color"
+	"strings"
+	"sync"
 	"time"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
+	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/widget"
@@ -14,9 +19,12 @@ import (
 	"github.com/lucasmlousada-scality/sosget/internal/sftp"
 )
 
-const (
-	modeEmail    = "By email"
-	modeUsername = "By username"
+// Status colors for visual feedback.
+var (
+	colorInfo    = color.NRGBA{R: 0x60, G: 0x60, B: 0x60, A: 0xff} // neutral grey
+	colorLoading = color.NRGBA{R: 0x1e, G: 0x88, B: 0xe5, A: 0xff} // blue
+	colorSuccess = color.NRGBA{R: 0x2e, G: 0x7d, B: 0x32, A: 0xff} // green
+	colorError   = color.NRGBA{R: 0xc6, G: 0x28, B: 0x28, A: 0xff} // red
 )
 
 type sosApp struct {
@@ -25,21 +33,23 @@ type sosApp struct {
 	sftpClient    *sftp.Client
 	selectedFiles []sftp.FileEntry
 
-	lookupMode     string // modeEmail or modeUsername
 	lookupEntry    *widget.Entry
-	lookupFormItem *widget.FormItem
 	otpEntry       *widget.Entry
-	status         *widget.Label
+	status         *canvas.Text
+	progress       *widget.ProgressBar
 	downloadDirLbl *widget.Label
 	fileList       *fyne.Container
 	downloadBtn    *widget.Button
+	cancelBtn      *widget.Button
 	connectBtn     *widget.Button
+
+	cancelDownload context.CancelFunc
 }
 
-func Run() {
+func Run(version string) {
 	a := app.New()
 	sa := &sosApp{}
-	sa.win = a.NewWindow("sosget — SOS Report Fetcher")
+	sa.win = a.NewWindow("sosget " + version + " — SOS Report Fetcher")
 	sa.win.Resize(fyne.NewSize(740, 580))
 	sa.win.SetMaster()
 
@@ -55,31 +65,14 @@ func Run() {
 }
 
 func (sa *sosApp) buildUI() fyne.CanvasObject {
-	sa.lookupMode = modeEmail
-
 	sa.lookupEntry = widget.NewEntry()
-	sa.lookupEntry.SetPlaceHolder("username@company.com")
-
-	sa.lookupFormItem = widget.NewFormItem("Customer email", sa.lookupEntry)
-
-	modeToggle := widget.NewRadioGroup([]string{modeEmail, modeUsername}, func(selected string) {
-		sa.lookupMode = selected
-		if selected == modeUsername {
-			sa.lookupFormItem.Text = "Username"
-			sa.lookupEntry.SetPlaceHolder("firstname.lastname  (e.g. jane.doe)")
-		} else {
-			sa.lookupFormItem.Text = "Customer email"
-			sa.lookupEntry.SetPlaceHolder("username@company.com")
-		}
-	})
-	modeToggle.SetSelected(modeEmail)
-	modeToggle.Horizontal = true
+	sa.lookupEntry.SetPlaceHolder("jane.doe or jane@company.com")
 
 	sa.otpEntry = widget.NewPasswordEntry()
 	sa.otpEntry.SetPlaceHolder("6-digit code from your authenticator app")
 
-	sa.status = widget.NewLabel("Enter customer info and OTP, then click Connect.")
-	sa.status.Wrapping = fyne.TextWrapWord
+	sa.status = canvas.NewText("Enter customer email or username and OTP, then click Connect.", colorInfo)
+	sa.status.TextSize = 13
 
 	sa.downloadDirLbl = widget.NewLabel(sa.downloadDirText())
 	sa.downloadDirLbl.Wrapping = fyne.TextTruncate
@@ -94,9 +87,14 @@ func (sa *sosApp) buildUI() fyne.CanvasObject {
 	sa.downloadBtn = widget.NewButton("Download Selected", sa.onDownload)
 	sa.downloadBtn.Disable()
 
+	sa.cancelBtn = widget.NewButton("Cancel", sa.onCancel)
+	sa.cancelBtn.Hide()
+
+	sa.progress = widget.NewProgressBar()
+	sa.progress.Hide()
+
 	form := widget.NewForm(
-		widget.NewFormItem("Lookup by", modeToggle),
-		sa.lookupFormItem,
+		widget.NewFormItem("Email / Username", sa.lookupEntry),
 		widget.NewFormItem("OTP code", sa.otpEntry),
 	)
 
@@ -110,35 +108,34 @@ func (sa *sosApp) buildUI() fyne.CanvasObject {
 	footer := container.NewVBox(
 		widget.NewSeparator(),
 		sa.status,
-		container.NewHBox(sa.downloadBtn, sa.downloadDirLbl),
+		sa.progress,
+		container.NewHBox(sa.downloadBtn, sa.cancelBtn, sa.downloadDirLbl),
 	)
 
 	return container.NewBorder(header, footer, nil, nil, scroll)
 }
 
 func (sa *sosApp) onConnect() {
-	input := sa.lookupEntry.Text
+	input := strings.TrimSpace(sa.lookupEntry.Text)
 	otp := sa.otpEntry.Text
 
 	if input == "" {
-		if sa.lookupMode == modeUsername {
-			sa.setStatus("Please enter a username (e.g. firstname.lastname).")
-		} else {
-			sa.setStatus("Please enter a customer email.")
-		}
+		sa.setError("Please enter a customer email or username.")
 		return
 	}
 	if otp == "" {
-		sa.setStatus("Please enter your OTP code.")
+		sa.setError("Please enter your OTP code.")
 		return
 	}
 	if sa.cfg == nil {
-		sa.setStatus("Not configured — click ⚙ Settings first.")
+		sa.setError("Not configured — click ⚙ Settings first.")
 		return
 	}
 
 	sa.connectBtn.Disable()
-	sa.setStatus("Connecting to " + config.SFTPHost + "...")
+	sa.setLoading("Connecting to " + config.SFTPHost + "...")
+	// OTP codes are single-use; clear the field so a stale code is not reused.
+	sa.otpEntry.SetText("")
 	sa.fileList.Objects = nil
 	sa.fileList.Refresh()
 	sa.selectedFiles = nil
@@ -146,7 +143,7 @@ func (sa *sosApp) onConnect() {
 	sa.downloadBtn.SetText("Download Selected")
 
 	go func() {
-		defer sa.connectBtn.Enable()
+		defer fyne.Do(func() { sa.connectBtn.Enable() })
 
 		if sa.sftpClient != nil {
 			sa.sftpClient.Close()
@@ -162,27 +159,29 @@ func (sa *sosApp) onConnect() {
 			TwoFADevice: sa.cfg.TwoFADevice,
 		})
 		if err != nil {
-			sa.setStatus("Connection failed: " + err.Error())
+			sa.setError("Connection failed: " + err.Error())
 			return
 		}
 		sa.sftpClient = client
 
 		var username string
 
-		if sa.lookupMode == modeUsername {
+		// Auto-detect: an "@" means it's an email (fuzzy search),
+		// otherwise treat the input directly as a username.
+		if !strings.Contains(input, "@") {
 			// Direct mode: use exactly what the user typed as the folder name.
 			// CustomerPathForUser will build /customers/chroot-<username>/home/<username>
 			username = input
 		} else {
 			// Email mode: fuzzy-search chroot-* folders
-			sa.setStatus("Searching for customer folder...")
+			sa.setLoading("Searching for customer folder...")
 			candidates, err := client.FindCustomerFolders(config.SFTPBasePath, input)
 			if err != nil {
-				sa.setStatus("Error scanning folders: " + err.Error())
+				sa.setError("Error scanning folders: " + err.Error())
 				return
 			}
 			if len(candidates) == 0 {
-				sa.setStatus("No folder found matching " + input)
+				sa.setError("No folder found matching " + input)
 				return
 			}
 
@@ -207,55 +206,60 @@ func (sa *sosApp) onConnect() {
 				})
 				username = <-ch
 				if username == "" {
-					sa.setStatus("Cancelled.")
+					sa.setError("Cancelled.")
 					return
 				}
 			}
 		}
 
 		remotePath := sftp.CustomerPathForUser(config.SFTPBasePath, username)
-		sa.setStatus("Listing files at " + remotePath + "...")
+		sa.setLoading("Listing files at " + remotePath + "...")
 
 		files, err := client.ListFiles(remotePath)
 		if err != nil {
-			sa.setStatus("Error listing files: " + err.Error())
+			sa.setError("Error listing files: " + err.Error())
 			return
 		}
 		if len(files) == 0 {
-			sa.setStatus("No files found at " + remotePath)
+			sa.setError("No files found at " + remotePath)
 			return
 		}
 
-		sa.fileList.Objects = nil
-		for _, f := range files {
-			label := fmt.Sprintf("%-60s  %8s  %s", f.Name, formatSize(f.Size), formatAge(f.ModTime))
-			check := widget.NewCheck(label, func(checked bool) {
-				if checked {
-					sa.selectedFiles = append(sa.selectedFiles, f)
-				} else {
-					n := sa.selectedFiles[:0]
-					for _, s := range sa.selectedFiles {
-						if s.Path != f.Path {
-							n = append(n, s)
+		fyne.Do(func() {
+			sa.fileList.Objects = nil
+			for _, f := range files {
+				label := fmt.Sprintf("%-60s  %8s  %s", f.Name, formatSize(f.Size), formatAge(f.ModTime))
+				check := widget.NewCheck(label, func(checked bool) {
+					if checked {
+						sa.selectedFiles = append(sa.selectedFiles, f)
+					} else {
+						n := sa.selectedFiles[:0]
+						for _, s := range sa.selectedFiles {
+							if s.Path != f.Path {
+								n = append(n, s)
+							}
 						}
+						sa.selectedFiles = n
 					}
-					sa.selectedFiles = n
-				}
-				count := len(sa.selectedFiles)
-				if count > 0 {
-					sa.downloadBtn.SetText(fmt.Sprintf("Download Selected (%d)", count))
-					sa.downloadBtn.Enable()
-				} else {
-					sa.downloadBtn.SetText("Download Selected")
-					sa.downloadBtn.Disable()
-				}
-			})
-			sa.fileList.Add(check)
-		}
-		sa.fileList.Refresh()
-		sa.setStatus(fmt.Sprintf("%d file(s) found — select and click Download.", len(files)))
+					count := len(sa.selectedFiles)
+					if count > 0 {
+						sa.downloadBtn.SetText(fmt.Sprintf("Download Selected (%d)", count))
+						sa.downloadBtn.Enable()
+					} else {
+						sa.downloadBtn.SetText("Download Selected")
+						sa.downloadBtn.Disable()
+					}
+				})
+				sa.fileList.Add(check)
+			}
+			sa.fileList.Refresh()
+		})
+		sa.setSuccess(fmt.Sprintf("%d file(s) found — select and click Download.", len(files)))
 	}()
 }
+
+// maxConcurrentDownloads caps how many files transfer in parallel.
+const maxConcurrentDownloads = 3
 
 func (sa *sosApp) onDownload() {
 	if sa.sftpClient == nil || len(sa.selectedFiles) == 0 {
@@ -265,17 +269,96 @@ func (sa *sosApp) onDownload() {
 	copy(files, sa.selectedFiles)
 
 	doDownload := func(destDir string) {
-		sa.downloadBtn.Disable()
-		go func() {
-			defer sa.downloadBtn.Enable()
-			for i, f := range files {
-				sa.setStatus(fmt.Sprintf("Downloading %d/%d: %s", i+1, len(files), f.Name))
-				if err := sa.sftpClient.Download(f, destDir); err != nil {
-					sa.setStatus("Error: " + err.Error())
-					return
-				}
+		ctx, cancel := context.WithCancel(context.Background())
+		sa.cancelDownload = cancel
+
+		// Total bytes across all selected files, for the aggregate progress bar.
+		var totalBytes int64
+		for _, f := range files {
+			totalBytes += f.Size
+		}
+
+		// Per-file byte counters, summed for overall progress.
+		progressByFile := make([]int64, len(files))
+		var mu sync.Mutex
+
+		refreshProgress := func() {
+			mu.Lock()
+			var sum int64
+			for _, v := range progressByFile {
+				sum += v
 			}
-			sa.setStatus(fmt.Sprintf("Done — %d file(s) saved to %s", len(files), destDir))
+			mu.Unlock()
+			if totalBytes > 0 {
+				fyne.Do(func() { sa.progress.SetValue(float64(sum) / float64(totalBytes)) })
+			}
+		}
+
+		fyne.Do(func() {
+			sa.downloadBtn.Disable()
+			sa.connectBtn.Disable()
+			sa.cancelBtn.Show()
+			sa.progress.SetValue(0)
+			sa.progress.Show()
+		})
+
+		go func() {
+			defer fyne.Do(func() {
+				sa.downloadBtn.Enable()
+				sa.connectBtn.Enable()
+				sa.cancelBtn.Hide()
+				sa.progress.Hide()
+			})
+			defer cancel()
+
+			sem := make(chan struct{}, maxConcurrentDownloads)
+			var wg sync.WaitGroup
+			var firstErr error
+			var errMu sync.Mutex
+
+			for i := range files {
+				// Stop launching new transfers if cancelled or one already failed.
+				if ctx.Err() != nil {
+					break
+				}
+				wg.Add(1)
+				sem <- struct{}{}
+				go func(idx int, f sftp.FileEntry) {
+					defer wg.Done()
+					defer func() { <-sem }()
+
+					progress := func(written, total int64) {
+						mu.Lock()
+						progressByFile[idx] = written
+						mu.Unlock()
+						refreshProgress()
+					}
+					sa.setLoading(fmt.Sprintf("Downloading %s...", f.Name))
+					if err := sa.sftpClient.Download(ctx, f, destDir, progress); err != nil {
+						errMu.Lock()
+						if firstErr == nil {
+							firstErr = err
+						}
+						errMu.Unlock()
+						cancel() // stop the other transfers
+					}
+				}(i, files[i])
+			}
+
+			wg.Wait()
+
+			switch {
+			case ctx.Err() != nil && firstErr == nil:
+				sa.setError("Download cancelled.")
+			case firstErr != nil:
+				if ctx.Err() != nil {
+					sa.setError("Download cancelled.")
+				} else {
+					sa.setError("Error: " + firstErr.Error())
+				}
+			default:
+				sa.setSuccess(fmt.Sprintf("Done — %d file(s) saved to %s", len(files), destDir))
+			}
 		}()
 	}
 
@@ -288,6 +371,13 @@ func (sa *sosApp) onDownload() {
 			}
 			doDownload(uri.Path())
 		}, sa.win)
+	}
+}
+
+func (sa *sosApp) onCancel() {
+	if sa.cancelDownload != nil {
+		sa.setLoading("Cancelling...")
+		sa.cancelDownload()
 	}
 }
 
@@ -344,13 +434,23 @@ func (sa *sosApp) openSettings() {
 		}
 		sa.cfg, _ = config.Load()
 		sa.downloadDirLbl.SetText(sa.downloadDirText())
-		sa.setStatus("Settings saved.")
+		sa.setSuccess("Settings saved.")
 	}, sa.win)
 }
 
-func (sa *sosApp) setStatus(msg string) {
-	sa.status.SetText(msg)
+// setStatusColor updates the status text and its color, safe from any goroutine.
+func (sa *sosApp) setStatusColor(msg string, c color.Color) {
+	fyne.Do(func() {
+		sa.status.Text = msg
+		sa.status.Color = c
+		sa.status.Refresh()
+	})
 }
+
+func (sa *sosApp) setStatus(msg string)  { sa.setStatusColor(msg, colorInfo) }
+func (sa *sosApp) setLoading(msg string) { sa.setStatusColor(msg, colorLoading) }
+func (sa *sosApp) setSuccess(msg string) { sa.setStatusColor(msg, colorSuccess) }
+func (sa *sosApp) setError(msg string)   { sa.setStatusColor(msg, colorError) }
 
 func (sa *sosApp) downloadDirText() string {
 	if sa.cfg != nil && sa.cfg.DownloadDir != "" {

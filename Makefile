@@ -2,13 +2,16 @@ BINARY  := sosget
 VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -s -w -X main.version=$(VERSION)
 
-.PHONY: build tidy clean release-mac release-linux release-windows
+.PHONY: build tidy test clean release-mac release-linux release-windows
 
 build:
 	go build -ldflags="$(LDFLAGS)" -o $(BINARY) ./cmd/sosget
 
 tidy:
 	go mod tidy
+
+test:
+	go test ./...
 
 clean:
 	rm -f $(BINARY) && rm -rf dist/

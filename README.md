@@ -111,10 +111,10 @@ To change settings later, click **⚙ Settings** in the main window.
    ./sosget
    ```
 
-2. Choose how to look up the customer with the **Lookup by** selector:
+2. In the **Email / Username** field, enter either:
 
-   - **By email** — enter the customer's email, e.g. `username@customer.com`. The app fuzzy-matches it against the customer folders on the server to find the right one.
-   - **By username** — enter the folder username directly, e.g. `jane.doe`. The app uses it as-is, with no matching.
+   - **An email**, e.g. `username@customer.com` — the app detects the `@`, fuzzy-matches it against the customer folders on the server, and finds the right one (offering a choice if several match).
+   - **A username**, e.g. `jane.doe` — with no `@`, the app uses it directly as the folder name, no matching.
 
 3. Open your authenticator app (e.g. Google Authenticator or OneLogin Protect) and enter the current 6-digit code in the **OTP code** field.
 
@@ -122,12 +122,14 @@ To change settings later, click **⚙ Settings** in the main window.
    - The app connects to `ftp.scality.com` using your credentials.
    - It navigates to `/customers/chroot-{username}/home/{username}/`.
    - Files are listed sorted newest first.
+   - The status line is colored: blue while working, green on success, red on error.
 
-5. Tick the files you want to download.
+5. Tick the files you want to download. Optionally tick **Extract after download** to automatically unpack `.tar.xz` / `.tar.gz` / `.tar` archives (file names that exceed the 255-byte filesystem limit are written with a truncated name rather than failing the whole extraction).
 
 6. Click **Download Selected (N)**.
    - Files are saved to your configured download folder.
-   - The status bar shows progress and confirms when done.
+   - The status bar shows per-file download percentage and confirms when done.
+   - After each download the file size is verified against the server to catch truncated transfers.
 
 ---
 
@@ -141,10 +143,19 @@ If you need to configure the tool on a server without a display, use the CLI mod
 
 This prompts for username and password in the terminal and writes the same config file that the GUI uses.
 
+## Other commands
+
+```sh
+./sosget --version    # print the build version and exit
+./sosget --help       # show usage
+```
+
 ---
 
 ## Notes
 
 - The SFTP host (`ftp.scality.com`), port (`22`), and base path (`/customers`) are hardcoded — they never change for Scality support use.
+- The server's SSH host key is verified against `~/.ssh/known_hosts`. The first connection records the key (trust-on-first-use); if the key later changes the connection is refused, which guards against man-in-the-middle attacks. If the server key legitimately changes, remove the old `ftp.scality.com` line from `~/.ssh/known_hosts`.
 - Credentials are stored in the OS keychain (macOS Keychain, Windows Credential Manager, Linux Secret Service). The config file on disk contains only non-sensitive settings.
+- OTP codes are single-use; the field is cleared after each Connect attempt.
 - Downloaded sosreports are excluded from git by `.gitignore` — they will never be accidentally committed if you run `sosget` from inside the repo directory.
